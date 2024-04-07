@@ -1,0 +1,209 @@
+--- STEP 1: Basic Exploration
+--- Given the data supplied through Uber Eats, we know both the total customer fare and the amount that was paid the Driver
+--- Create a coloumn detailing the amount that Uber Eats made off each order (in dollars)
+--- Create a separate column showing how much of the customer's fare went to the driver, percentage-wise
+
+SELECT 
+  order_id, 
+  created, 
+  delivered, 
+  distance_miles, 
+  store_id, 
+  est_payout, 
+  total_tip, 
+  payout, 
+  customer_fare,
+  ROUND(((payout/customer_fare)*100),1) AS percent_drivers_cut,
+  ROUND((customer_fare - payout),2) AS ubers_revenue,
+  deliveries, status
+FROM `Delivery.uber_eats`
+ORDER BY order_id
+
+
+
+--- On average, how much of the customer's total delivery fare goes to the Driver
+--- Provide the amount of "Delivered" orders for context
+
+
+WITH financial_split AS 
+  (
+    SELECT 
+      order_id, 
+      created, 
+      delivered, 
+      distance_miles, 
+      store_id, 
+      est_payout, 
+      total_tip, 
+      payout, 
+      customer_fare,
+      ROUND(((payout/customer_fare)*100),1) AS percent_drivers_cut,
+      ROUND((customer_fare - payout),2) AS ubers_revenue,
+      deliveries, 
+      status
+    FROM `Delivery.uber_eats`
+    ORDER BY order_id
+  )
+SELECT
+  ROUND(AVG(percent_drivers_cut),2) AS avg_drivers_cut_percentage,
+  COUNT(order_id) AS num_of_orders
+FROM financial_split
+WHERE status = "Delivered"
+
+
+
+--- Order 475 has what looks like a clerical error
+--- Payout jumped from an estimated $7.75 to $67.75 after delivery, with only a $3.50 tip. Fix error
+--- Side Note: This error has been permanently fixed at the source, since writing this query
+
+
+UPDATE 
+  Delivery.uber_eats
+SET 
+  payout = 7.75
+WHERE order_id = 475
+
+
+
+--- Detail the orders that resulted in a net loss for Uber Eats
+
+
+SELECT 
+  order_id, created, delivered, distance_miles, store_id, est_payout, total_tip, payout, customer_fare,
+  ROUND(((payout/customer_fare)*100),1) AS percent_drivers_cut,
+  ROUND((customer_fare - payout),2) AS ubers_revenue,
+  deliveries, status
+FROM `Delivery.uber_eats`
+WHERE (customer_fare - payout) < 0
+ORDER BY order_id
+
+
+
+--- Calculate the number of orders that resulted in a net loss for Uber Eats 
+--- And calculate the average amount lost per order on those orders
+
+
+WITH financial_split AS 
+  (
+    SELECT 
+      order_id, created, delivered, distance_miles, store_id, est_payout, total_tip, payout, customer_fare,
+      ROUND(((payout/customer_fare)*100),1) AS percent_drivers_cut,
+      ROUND((customer_fare - payout),2) AS ubers_revenue,
+      deliveries, status
+    FROM `Delivery.uber_eats`
+    WHERE (customer_fare - payout) < 0
+    ORDER BY order_id
+  )
+SELECT
+  COUNT(order_id) AS num_of_losses,
+  ROUND(AVG(ubers_revenue),2) AS avg_loss
+FROM uber_loss
+
+
+
+--- STEP 2:
+--- Let's consider wider trends
+--- Figure out payment split by month, to see if it’s trending in a certain direction
+
+
+WITH financial_split AS 
+  (
+    SELECT 
+      order_id, created, delivered, distance_miles, store_id, est_payout, total_tip, payout, customer_fare,
+      ROUND(((payout/customer_fare)*100),1) AS percent_drivers_cut,
+      ROUND((customer_fare - payout),2) AS ubers_revenue,
+      deliveries, status
+    FROM `Delivery.uber_eats`
+    WHERE status = "Delivered"
+  )
+SELECT
+  CASE
+    WHEN EXTRACT(Month FROM TIMESTAMP(delivered)) = 1 THEN "Jan"
+    WHEN EXTRACT(Month FROM TIMESTAMP(delivered)) = 2 THEN "Feb"
+    WHEN EXTRACT(Month FROM TIMESTAMP(delivered)) = 3 THEN "Mar"
+    WHEN EXTRACT(Month FROM TIMESTAMP(delivered)) = 4 THEN "Apr"
+    WHEN EXTRACT(Month FROM TIMESTAMP(delivered)) = 5 THEN "May"
+    WHEN EXTRACT(Month FROM TIMESTAMP(delivered)) = 6 THEN "Jun"
+    WHEN EXTRACT(Month FROM TIMESTAMP(delivered)) = 7 THEN "Jul"
+    WHEN EXTRACT(Month FROM TIMESTAMP(delivered)) = 8 THEN "Aug"
+    WHEN EXTRACT(Month FROM TIMESTAMP(delivered)) = 9 THEN "Sep"
+    WHEN EXTRACT(Month FROM TIMESTAMP(delivered)) = 10 THEN "Oct"
+    WHEN EXTRACT(Month FROM TIMESTAMP(delivered)) = 11 THEN "Nov"
+    WHEN EXTRACT(Month FROM TIMESTAMP(delivered)) = 12 THEN "Dec"
+  END month,
+  EXTRACT(Year FROM TIMESTAMP(delivered)) AS year,
+  SUM(deliveries) AS num_of_deliveries,
+  ROUND(((SUM(payout))/(SUM(customer_fare))*100),2) AS percent_of_drivers_cut,
+  ROUND(SUM(ubers_revenue),2) AS uber_income,
+  ROUND(SUM(payout),2) AS driver_income
+FROM financial_split
+GROUP BY year, month;
+
+
+
+--- Breakdown changes to payment distribution based on how many orders are part of a single "Delivery" (ie, single vs batched)
+
+
+WITH financial_split AS
+  (
+    SELECT 
+      deliveries,
+      payout AS driver_income,
+      ROUND((customer_fare - payout),2) AS ue_income,
+      customer_fare
+    FROM `Delivery.uber_eats`
+    WHERE status = "Delivered"
+    AND deliveries IS NOT NULL
+  )
+SELECT
+  deliveries AS orders_in_batch,
+  ROUND(SUM(driver_income),2) AS total_driver_income,
+  ROUND(AVG(driver_income),2) AS avg_driver_income,
+  ROUND((SUM(driver_income)/SUM(customer_fare)*100),1) AS percent_driver_income,
+  ROUND(SUM(ue_income),2) AS total_ue_income,
+  ROUND(AVG(ue_income),2) AS avg_ue_income,
+  ROUND((SUM(ue_income)/SUM(customer_fare)*100),1) AS percent_ue_income,
+  COUNT(deliveries) AS num_of_orders
+FROM financial_split
+GROUP BY deliveries
+
+
+
+--- Consider possibility of payout-to-mileage trends (ie do orders with higher miles result in higher pay)
+
+
+WITH mileage AS
+  (
+    SELECT 
+      distance_miles,
+      total_tip,
+      payout,
+      (payout-total_tip) AS uber_pay
+    FROM `Delivery.uber_eats`
+    WHERE status = "Delivered"
+    AND distance_miles IS NOT NULL
+    ORDER BY distance_miles DESC
+  ),
+miles_case AS
+  (
+    SELECT
+      *,
+      CASE
+        WHEN distance_miles >= 20 THEN 20
+        WHEN distance_miles >= 15 THEN 15
+        WHEN distance_miles >= 10 THEN 10
+        WHEN distance_miles >= 5 THEN 5
+        WHEN distance_miles > 1 THEN 1
+        ELSE 0
+      END miles
+    FROM mileage
+  )
+SELECT
+  miles,
+  ROUND(AVG(total_tip),2) AS avg_tip,
+  ROUND(AVG(payout),2) AS avg_pay,
+  ROUND(AVG(uber_pay),2) AS avg_paid_by_uber
+FROM miles_case
+GROUP BY miles
+ORDER BY miles DESC
+
