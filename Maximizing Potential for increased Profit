@@ -1,0 +1,388 @@
+--- This project was executed in Big Query and contains some quirks that are specific to Big Query
+
+--- STEP 1: 	
+--- Combine doordash & uber_eats Tables on directly related columns
+--- Include relevant data from stores Table
+
+
+WITH combined_orders AS 
+  (
+    SELECT 
+      order_id, created, store_id, payout, delivered, status, category, service, shift_id
+    FROM `Delivery.doordash` AS dd
+    UNION ALL
+    SELECT 
+      order_id, created, store_id, payout, delivered, status, category, service, shift_id
+    FROM `Delivery.uber_eats` AS ue
+  )
+SELECT 
+  order_id, created, co.store_id, store_name, city, payout, delivered, status, category, type, service, shift_id 
+FROM combined_orders AS co
+  LEFT JOIN `Delivery.stores` AS s
+    ON co.store_id = s.store_id
+ORDER BY order_id;
+
+--- Typically, you would write a query beginning with CREATE TEMP TABLE. Because this was done in Big Query, the steps are as follow
+--- At the top of the Editor Window, select the following: (MORE > QUERY SETTINGS > SET A DESTINATION TABLE FOR QUERY RESULTS)
+--- Fill out appropriate boxes and then run the above Query in the Editor Window
+
+
+
+
+--- STEP 2: Basic Queries
+--- Retrieve list of store locations, with aggregated data for each location
+--- Include Total Income; Number of Orders; and Average Pay of deliveries
+
+
+SELECT 
+  store_name,
+  city,
+  ROUND(SUM(payout),2) AS total_income,
+  COUNT(order_id) AS num_of_orders,
+  ROUND(AVG(payout),2) AS avg_pay
+FROM `Delivery.combined_orders`
+WHERE store_name IS NOT NULL
+GROUP BY store_name, city
+ORDER BY store_name
+
+
+
+--- Explore which locations have the highest average Pay
+
+
+SELECT 
+  store_name, 
+  city,
+  ROUND(AVG(payout),2) AS avg_pay,
+  COUNT(order_id) AS num_of_orders
+FROM `Delivery.combined_orders`
+GROUP BY store_name, city
+ORDER BY avg_pay DESC
+
+--- Two issues to address:
+--- Some of the Best Paying stores lack enough orders to draw meaningful conclusions
+--- And many of them are Shop & Deliver orders, which require additional research
+
+
+
+--- 20 Highest Paying stores with at least 10 orders
+--- Exclude Shop & Deliver orders
+
+
+SELECT 
+  store_name, 
+  city, 
+  ROUND(AVG(payout),2) AS avg_pay, 
+  COUNT(store_id) AS num_of_orders
+FROM `Delivery.combined_orders`
+WHERE type <> "Shop & Deliver"
+GROUP BY store_name, city
+HAVING num_of_orders >= 10
+ORDER BY avg_pay DESC
+LIMIT 20
+
+
+
+--- Using the criteria above, let’s consider order Frequency
+
+
+WITH top_paying AS 
+  (
+    SELECT 
+      store_name, 
+      city, 
+      ROUND(AVG(payout),2) AS avg_pay,
+      COUNT(store_id) AS num_of_orders
+    FROM `Delivery.combined_orders` AS co
+    WHERE type <> "Shop & Deliver"
+    GROUP BY store_name, city
+    HAVING num_of_orders >= 10
+    ORDER BY avg_pay DESC
+    LIMIT 20
+  )
+SELECT *
+FROM top_paying
+ORDER BY num_of_orders DESC;
+
+--- Observation: Hops N Drops gives the best odds for a high pay order, especially considering it's proximity to Benjarong 
+--- But I would also recommend experimenting with a targeted focus on Sumo Sushi
+
+
+
+--- Next, let’s consider which locations have been explored the most
+
+
+WITH city_overview AS 
+  (
+    SELECT 
+      city,
+      ROUND(SUM(payout),2) AS total_income,
+      COUNT(order_id) AS num_of_orders,
+      COUNT(DISTINCT(EXTRACT(date FROM delivered))) AS days_in_city,
+    FROM `Delivery.combined_orders`
+    WHERE city IS NOT NULL
+    GROUP BY city
+    ORDER BY city
+  )
+SELECT
+  *,
+  ROUND((total_income / days_in_city),2) AS income_per_day,
+  ROUND((total_income / num_of_orders),2) AS avg_pay_per_order,
+  ROUND((num_of_orders / days_in_city),2) AS orders_per_day
+FROM city_overview
+ORDER BY total_income DESC
+
+--- orders_per_day seems to be most likely indicator of where the driver focused
+--- While the driver recieved a greater total_income from Covington compared to Bonney Lake, the incredibly low orders_per_day ratio suggests they were received in passing
+--- the avg_pay_per_order along with num_of_days suggest Kent & Sumner might be worth further exploration
+--- Kent was also 
+
+
+
+--- STEP 3:
+--- Compile and organize the data from the shifts Table into a Daily Overview
+
+
+WITH shift_data AS 
+  (
+    SELECT
+      EXTRACT(date FROM(clocked_in)) AS date,
+      dd_deliveries,
+      dd_income,
+      ue_deliveries,
+      ue_income,
+      hours,
+      miles_driven,
+      total_deliveries,
+      total_income,
+      hourly_rate
+    FROM `Delivery.shifts`
+  )
+SELECT
+  date,
+  SUM(dd_deliveries) AS dd_deliveries,
+  ROUND(SUM(dd_income),2) AS dd_income,
+  SUM(ue_deliveries) AS ue_deliveries,
+  ROUND(SUM(ue_income),2) AS ue_income,
+  ROUND(SUM(hours),2) AS hours,
+  SUM(miles_driven) AS total_miles,
+  SUM(total_deliveries) AS total_deliveries,
+  ROUND(SUM(total_income),2) AS total_income,
+  ROUND(((SUM(total_income))/(SUM(hours))),2) AS hourly_rate
+FROM shift_data
+GROUP BY date
+ORDER BY date
+
+
+
+--- Look at which shifts were most profitable, in terms of hourly_rate
+
+
+SELECT
+  clocked_in,
+  clocked_out,
+  hours,
+  miles_driven,
+  total_deliveries,
+  total_income,
+  hourly_rate
+FROM `Delivery.shifts`
+WHERE hours >= 2
+ORDER BY hourly_rate DESC
+LIMIT 50
+
+
+
+--- Take the Top 50 shifts above and compare them to the full day
+
+
+WITH shifts_data AS 
+  (
+    SELECT
+      EXTRACT(date FROM(clocked_in)) AS date,
+      dd_deliveries,
+      dd_income,
+      ue_deliveries,
+      ue_income,
+      hours,
+      miles_driven,
+      total_deliveries,
+      total_income,
+      hourly_rate
+    FROM `portfolio1821.Delivery.shifts`
+  ),
+daily_overview AS 
+  (
+    SELECT
+      date,
+      SUM(dd_deliveries) AS dd_deliveries,
+      ROUND(SUM(dd_income),2) AS dd_income,
+      SUM(ue_deliveries) AS ue_deliveries,
+      ROUND(SUM(ue_income),2) AS ue_income,
+      ROUND(SUM(hours),2) AS hours,
+      SUM(miles_driven) AS total_miles,
+      SUM(total_deliveries) AS total_deliveries,
+      ROUND(SUM(total_income),2) AS total_income,
+      ROUND(((SUM(total_income))/(SUM(hours))),2) AS hourly_rate
+    FROM shifts_data
+    GROUP BY date
+    ORDER BY date
+  ),
+top_shifts AS
+  (
+    SELECT
+      DENSE_RANK() OVER(ORDER BY hourly_rate DESC) AS hourly_rank,
+      EXTRACT(date FROM clocked_in) AS date,
+      clocked_in,
+      clocked_out,
+      hours,
+      miles_driven,
+      total_deliveries,
+      total_income,
+      hourly_rate
+    FROM `Delivery.shifts`
+    WHERE hours >= 2
+    ORDER BY hourly_rate DESC
+    LIMIT 50
+  )
+SELECT 
+  DENSE_RANK() OVER(ORDER BY do.hourly_rate DESC) AS new_hourly_rank,
+  hourly_rank AS individual_shift_rank,
+  do.date,
+  do.hours AS total_hours,
+  (do.hours - ts.hours) AS added_hours,
+  total_miles,
+  (total_miles - miles_driven) AS added_miles,
+  do.total_deliveries,
+  (do.total_deliveries - ts.total_deliveries) AS added_deliveries,
+  do.total_income,
+  ROUND((do.total_income - ts.total_income),2) AS added_income,
+  do.hourly_rate,
+  (ROUND(100 *((do.hourly_rate - ts.hourly_rate) / ts.hourly_rate))) AS hourly_perc_change
+FROM daily_overview do
+JOIN top_shifts ts
+  ON do.date = ts.date
+ORDER BY do.hourly_rate DESC
+
+--- Observations:
+--- Most days dropped by a small margin, but did actually retain a fairly high hourly rate
+--- Comparing the two against each other (with new_hourly_rank column) also revealed that several of the Top 50 shifts were from the same day
+
+
+
+--- Finally:
+--- Write a Recursive CTE that deconstructs each work hour into 15 minute increments
+--- We will use this to breakdown how much income was earned, both by day and hour of the day, suggesting what time & day offer the highest potential for earnings
+
+
+WITH RECURSIVE timesheet AS
+  (
+    SELECT 
+      TIMESTAMP('2024-04-04 07:00:00') AS ts
+    UNION ALL
+    SELECT 
+      TIMESTAMP_ADD(ts, INTERVAL 15 MINUTE)
+    FROM timesheet 
+    WHERE ts < TIMESTAMP('2024-04-04 22:00:00')
+  )
+SELECT 
+  TIME(ts) AS intervals
+FROM timesheet
+ORDER BY ts
+
+--- Note: Big Query requires Recursive CTE’s to be saved as a Temp Table rather than part of the long string below, probably due to processing power 
+--- The Recursive CTE above was saved as a Temp Table titled "intervals" which will be referenced below 
+--- See Step 2 (^) for details on how to save a Temp Table in Big Query
+
+
+
+WITH extractions AS 
+  (
+    SELECT
+      order_id,
+      store_id,
+      payout,
+      delivered,
+      type,
+      co.shift_id,
+      DATE(clocked_in) AS day,
+      TIME(clocked_in) AS start_shift,
+      TIME(clocked_out) AS end_shift,
+      EXTRACT(dayofweek FROM delivered) AS dow,
+      TIME(delivered) AS delivery_time
+    FROM portfolio1821.Delivery.combined_orders AS co
+    JOIN portfolio1821.Delivery.shifts AS s
+    ON co.shift_id = s.shift_id
+  ),
+c_statements AS 
+  (
+    SELECT 
+      *,
+      CASE
+        WHEN dow = 1 THEN "Sun"
+        WHEN dow = 2 THEN "Mon"
+        WHEN dow = 3 THEN "Tues"
+        WHEN dow = 4 THEN "Wed"
+        WHEN dow = 5 THEN "Thurs"
+        WHEN dow = 6 THEN "Fri"
+        WHEN dow = 7 THEN "Sat"
+      END AS day_of_week,
+      CASE 
+        WHEN EXTRACT(HOUR FROM delivery_time) BETWEEN 7 AND 11 THEN CONCAT(EXTRACT(HOUR FROM delivery_time), ' am')
+        WHEN EXTRACT(HOUR FROM delivery_time) = 12 THEN CONCAT(EXTRACT(HOUR FROM delivery_time), ' pm')
+        WHEN EXTRACT(HOUR FROM delivery_time) BETWEEN 13 AND 22 THEN CONCAT((EXTRACT(HOUR FROM delivery_time) - 12), ' pm')
+      END AS hour
+    FROM extractions
+  ),
+time_extractions AS
+  (
+    SELECT
+      shift_id,
+      CASE
+        WHEN EXTRACT(dayofweek FROM clocked_in) = 1 THEN "Sun"
+        WHEN EXTRACT(dayofweek FROM clocked_in) = 2 THEN "Mon"
+        WHEN EXTRACT(dayofweek FROM clocked_in) = 3 THEN "Tues"
+        WHEN EXTRACT(dayofweek FROM clocked_in) = 4 THEN "Wed"
+        WHEN EXTRACT(dayofweek FROM clocked_in) = 5 THEN "Thurs"
+        WHEN EXTRACT(dayofweek FROM clocked_in) = 6 THEN "Fri"
+        WHEN EXTRACT(dayofweek FROM clocked_in) = 7 THEN "Sat"
+      END day_of_week,
+      CASE 
+        WHEN EXTRACT(HOUR FROM intervals) BETWEEN 7 AND 11 THEN CONCAT(EXTRACT(HOUR FROM intervals), ' am')
+        WHEN EXTRACT(HOUR FROM intervals) = 12 THEN CONCAT(EXTRACT(HOUR FROM intervals), ' pm')
+        WHEN EXTRACT(HOUR FROM intervals) BETWEEN 13 AND 22 THEN CONCAT((EXTRACT(HOUR FROM intervals) - 12), ' pm')
+      END hour,
+      intervals
+    FROM `Delivery.intervals` i
+    JOIN `Delivery.shifts` s
+      ON i.intervals >= TIME(s.clocked_in) AND i.intervals <= TIME(s.clocked_out)
+    GROUP BY shift_id, day_of_week, intervals
+    ORDER BY shift_id, day_of_week, intervals
+  ),
+time_aggregates AS 
+  (
+    SELECT
+      day_of_week,
+      hour,
+      (COUNT(intervals)/4) AS hour_worked
+    FROM time_extractions
+    GROUP BY day_of_week, hour
+  ),
+days_worked AS 
+  (
+    SELECT
+      cs.day_of_week,
+      cs.hour,
+      ta.hour_worked,
+      ROUND(SUM(payout), 2) AS income
+    FROM c_statements cs
+    JOIN time_aggregates ta
+      ON cs.day_of_week = ta.day_of_week
+      AND cs.hour = ta.hour
+    GROUP BY day_of_week, hour, hour_worked
+  )
+SELECT
+  *,
+  ROUND((income / hour_worked), 2) AS avg_income
+FROM days_worked
+ORDER BY avg_income DESC
