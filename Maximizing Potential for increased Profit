@@ -295,7 +295,6 @@ ORDER BY ts
 --- See Step 2 (^) for details on how to save a Temp Table in Big Query
 
 
-
 WITH extractions AS 
   (
     SELECT
