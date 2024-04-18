@@ -104,7 +104,8 @@ SELECT *
 FROM top_paying
 ORDER BY num_of_orders DESC;
 
---- Observation: Hops N Drops gives the best odds for a high pay order, especially considering it's proximity to Benjarong 
+--- Observation: Hops N Drops gives the best odds for a high pay order
+--- Esp considering it shares the same parking lot as Benjarong (first hand knowledge)
 --- But I would also recommend experimenting with a targeted focus on Sumo Sushi
 
 
@@ -135,31 +136,17 @@ ORDER BY total_income DESC
 --- orders_per_day seems to be most likely indicator of where the driver focused
 --- While the driver recieved a greater total_income from Covington compared to Bonney Lake, the incredibly low orders_per_day ratio suggests they were received in passing
 --- the avg_pay_per_order along with num_of_days suggest Kent & Sumner might be worth further exploration
---- Kent was also 
+--- Kent and Covington also came up a lot on the best orders query
+--- It might be worth experimenting further in the Kent, Covington, Sumner areas
 
 
 
 --- STEP 3:
---- Compile and organize the data from the shifts Table into a Daily Overview
+--- Create a Daily Overview by combining data from multiple shifts when they are part of the same day
 
 
-WITH shift_data AS 
-  (
-    SELECT
-      EXTRACT(date FROM(clocked_in)) AS date,
-      dd_deliveries,
-      dd_income,
-      ue_deliveries,
-      ue_income,
-      hours,
-      miles_driven,
-      total_deliveries,
-      total_income,
-      hourly_rate
-    FROM `Delivery.shifts`
-  )
 SELECT
-  date,
+  EXTRACT(date FROM(clocked_in)) AS date,
   SUM(dd_deliveries) AS dd_deliveries,
   ROUND(SUM(dd_income),2) AS dd_income,
   SUM(ue_deliveries) AS ue_deliveries,
@@ -169,10 +156,9 @@ SELECT
   SUM(total_deliveries) AS total_deliveries,
   ROUND(SUM(total_income),2) AS total_income,
   ROUND(((SUM(total_income))/(SUM(hours))),2) AS hourly_rate
-FROM shift_data
+FROM `Delivery.shifts`
 GROUP BY date
 ORDER BY date
-
 
 
 --- Look at which shifts were most profitable, in terms of hourly_rate
@@ -196,25 +182,10 @@ LIMIT 50
 --- Take the Top 50 shifts above and compare them to the full day
 
 
-WITH shifts_data AS 
+WITH daily_overview AS 
   (
     SELECT
       EXTRACT(date FROM(clocked_in)) AS date,
-      dd_deliveries,
-      dd_income,
-      ue_deliveries,
-      ue_income,
-      hours,
-      miles_driven,
-      total_deliveries,
-      total_income,
-      hourly_rate
-    FROM `portfolio1821.Delivery.shifts`
-  ),
-daily_overview AS 
-  (
-    SELECT
-      date,
       SUM(dd_deliveries) AS dd_deliveries,
       ROUND(SUM(dd_income),2) AS dd_income,
       SUM(ue_deliveries) AS ue_deliveries,
@@ -224,7 +195,7 @@ daily_overview AS
       SUM(total_deliveries) AS total_deliveries,
       ROUND(SUM(total_income),2) AS total_income,
       ROUND(((SUM(total_income))/(SUM(hours))),2) AS hourly_rate
-    FROM shifts_data
+    FROM `Delivery.shifts`
     GROUP BY date
     ORDER BY date
   ),
@@ -272,7 +243,7 @@ ORDER BY do.hourly_rate DESC
 
 --- Finally:
 --- Write a Recursive CTE that deconstructs each work hour into 15 minute increments
---- We will use this to breakdown how much income was earned, both by day and hour of the day, suggesting what time & day offer the highest potential for earnings
+--- Use this Recursive CTE to breakdown how much income was earned, by day and hour of the day, suggesting what time & day offer the highest potential for earnings
 
 
 WITH RECURSIVE timesheet AS
