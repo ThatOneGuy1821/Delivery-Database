@@ -207,3 +207,285 @@ FROM miles_case
 GROUP BY miles
 ORDER BY miles DESC
 
+
+
+--- Take a look at Driver Pay compared to Uber Eats pay
+
+
+WITH payment_info AS
+  (
+    SELECT 
+      order_id,
+      distance_miles,
+      est_payout,
+      total_tip,
+      payout,
+      ROUND((payout - total_tip),2) AS uber_pay,
+      deliveries
+    FROM `Delivery.uber_eats`
+    WHERE status = "Delivered"
+    ORDER BY order_id DESC
+  ),
+basic_calculations AS 
+  (
+    SELECT
+      order_id,
+      ROUND(((uber_pay/payout)*100),1) AS percent_uber_pay,
+      ROUND(((total_tip/payout)*100),1) AS percent_tip,
+      distance_miles,
+      payout,
+      total_tip,
+      deliveries
+    FROM payment_info
+    WHERE uber_pay <> 0
+    ORDER BY percent_uber_pay DESC
+  ),
+filters AS 
+  (
+    SELECT
+      CASE
+        WHEN percent_uber_pay = 100 THEN "100"
+        WHEN percent_uber_pay >= 85 THEN "85+"
+        WHEN percent_uber_pay >= 75 THEN "75 - 85"
+        WHEN percent_uber_pay >= 50 THEN "50 - 74"
+        WHEN percent_uber_pay >= 30 THEN "30 - 49"
+        WHEN percent_uber_pay >= 15 THEN "15 - 29"
+        WHEN percent_uber_pay < 15 THEN "Less than 15"
+        END uber_percentage,
+      *
+    FROM basic_calculations 
+  )
+SELECT
+  uber_percentage,
+  ROUND(AVG(distance_miles),2) AS avg_miles,
+  ROUND(AVG(payout),2) AS avg_pay,
+  ROUND(AVG(total_tip),2) AS avg_tip,
+  ROUND(AVG(deliveries),2) AS avg_deliveries
+FROM filters
+GROUP BY uber_percentage
+ORDER BY uber_percentage DESC
+
+
+
+--- Breakdown stats by City
+
+WITH compiled AS 
+  (
+    SELECT
+      order_id,
+      EXTRACT(Date FROM delivered) AS days,
+      (delivered - created) AS customer_wait_time,
+      distance_miles,
+      store_name,
+      city,
+      est_payout,
+      total_tip,
+      payout,
+      category,
+      status
+    FROM `Delivery.uber_eats` AS ue
+    LEFT JOIN `Delivery.stores` AS s
+      ON ue.store_id = s.store_id
+    WHERE delivered IS NOT NULL
+    ORDER BY customer_wait_time DESC
+  )
+SELECT
+  city,
+  ROUND(AVG(distance_miles),1) AS avg_mileage,
+  ROUND(AVG(payout),2) AS avg_pay,
+  AVG(customer_wait_time) AS avg_cust_wait,
+  COUNT(order_id) AS orders_received,
+  COUNT(DISTINCT(days)) AS num_of_days_in_area
+FROM compiled
+GROUP BY city
+ORDER BY orders_received DESC
+
+
+
+--- Drill Down further on stats by city
+
+
+WITH compiled AS 
+  (
+    SELECT
+      order_id,
+      EXTRACT(Date FROM delivered) AS days,
+      (delivered - created) AS customer_wait_time,
+      distance_miles,
+      store_name,
+      city,
+      est_payout,
+      total_tip,
+      payout,
+      category,
+      status
+    FROM `Delivery.uber_eats` AS ue
+    LEFT JOIN `Delivery.stores` AS s
+      ON ue.store_id = s.store_id
+    WHERE delivered IS NOT NULL
+    ORDER BY customer_wait_time DESC
+  ),
+aggregated AS
+  (
+    SELECT
+      city,
+      ROUND(AVG(distance_miles),1) AS avg_mileage,
+      ROUND(AVG(payout),2) AS avg_pay,
+      AVG(customer_wait_time) AS avg_cust_wait,
+      COUNT(order_id) AS orders_received,
+      COUNT(DISTINCT(days)) AS num_of_days_in_area
+    FROM compiled
+    GROUP BY city
+    ORDER BY orders_received DESC
+  )
+SELECT
+  city,
+  ROUND((avg_pay/(EXTRACT(minute FROM avg_cust_wait))),2) AS 
+    dollars_per_minute,
+  ROUND((orders_received/num_of_days_in_area),1) AS orders_per_day,
+  ROUND((avg_pay/avg_mileage),2) AS dollars_per_mile
+FROM aggregated
+
+
+
+--- Stats by Order Type 
+
+
+WITH compiled AS
+  (
+    SELECT 
+      order_id, created, store_name, city, est_payout, delivered, distance_miles,
+      EXTRACT(minute FROM(delivered - created)) AS customer_wait_time, 
+      total_tip, payout, customer_fare,
+      ROUND(((payout/customer_fare)*100),1) AS percent_drivers_cut,
+      ROUND((customer_fare - payout),2) AS ubers_revenue,
+      type, deliveries, status
+    FROM `Delivery.uber_eats` AS ue
+    LEFT JOIN `Delivery.stores` AS s
+      ON s.store_id = ue.store_id
+    ORDER BY order_id
+  )
+SELECT 
+  type,
+  COUNT(order_id) AS num_of_orders,
+  ROUND(AVG(customer_wait_time)) AS avg_cust_wait,
+  ROUND(SUM(payout),2) AS driver_income,
+  ROUND(SUM(ubers_revenue),2) AS avg_uber_revenue, 
+  ROUND(AVG(distance_miles),1) AS avg_miles
+FROM compiled
+GROUP BY type
+
+
+
+--- Further breakdown, showing most profitable types of orders for both driver and uber
+
+
+WITH compiled AS
+  (
+    SELECT 
+      order_id, created, store_name, city, est_payout, delivered, distance_miles,
+      EXTRACT(minute FROM(delivered - created)) AS customer_wait_time, 
+      total_tip, payout, customer_fare,
+      ROUND(((payout/customer_fare)*100),1) AS percent_drivers_cut,
+      ROUND((customer_fare - payout),2) AS ubers_revenue,
+      type, deliveries, status
+    FROM `Delivery.uber_eats` AS ue
+    LEFT JOIN `Delivery.stores` AS s
+      ON s.store_id = ue.store_id
+    ORDER BY order_id
+  ),
+next AS 
+  (
+    SELECT 
+      type,
+      COUNT(order_id) AS num_of_orders,
+      ROUND(AVG(customer_wait_time)) AS avg_cust_wait,
+      ROUND(SUM(payout),2) AS driver_income,
+      ROUND(SUM(ubers_revenue),2) AS avg_uber_revenue, 
+      ROUND(AVG(distance_miles),1) AS avg_miles
+    FROM compiled
+    GROUP BY type
+  )
+SELECT 
+  type,
+  ROUND((driver_income/num_of_orders),2) AS avg_per_order,
+  ROUND((avg_uber_revenue/num_of_orders),2) AS ubers_avg_per_order,
+  avg_cust_wait,
+  avg_miles
+FROM next
+WHERE num_of_orders > 1
+
+
+
+--- Most popular Restaurants
+
+WITH compiled AS
+  (
+    SELECT 
+      order_id, created, store_name, city, est_payout, delivered, distance_miles,
+      EXTRACT(minute FROM(delivered - created)) AS customer_wait_time, 
+      total_tip, payout, customer_fare,
+      ROUND(((payout/customer_fare)*100),1) AS percent_drivers_cut,
+      ROUND((customer_fare - payout),2) AS ubers_revenue,
+      type, deliveries, status
+    FROM `Delivery.uber_eats` AS ue
+    LEFT JOIN `Delivery.stores` AS s
+      ON s.store_id = ue.store_id
+    ORDER BY order_id
+  )
+SELECT 
+  store_name,
+  city,
+  COUNT(order_id) AS num_of_orders,
+  ROUND(AVG(customer_wait_time)) AS avg_cust_wait,
+  ROUND(SUM(payout),2) AS driver_income,
+  ROUND(SUM(ubers_revenue),2) AS avg_uber_revenue, 
+  ROUND(AVG(distance_miles),1) AS avg_miles
+FROM compiled
+GROUP BY store_name, city
+ORDER BY num_of_orders DESC
+
+
+
+--- List average income (both driver and uber) by store
+--- Include time between order creation and order delivery to give approximate delivery time
+
+
+WITH compiled AS
+  (
+    SELECT 
+      order_id, created, store_name, city, est_payout, delivered, distance_miles,
+      EXTRACT(minute FROM(delivered - created)) AS customer_wait_time, 
+      total_tip, payout, customer_fare,
+      ROUND(((payout/customer_fare)*100),1) AS percent_drivers_cut,
+      ROUND((customer_fare - payout),2) AS ubers_revenue,
+      type, deliveries, status
+    FROM `Delivery.uber_eats` AS ue
+    LEFT JOIN `Delivery.stores` AS s
+      ON s.store_id = ue.store_id
+    ORDER BY order_id
+  ),
+aggregates AS
+  (
+    SELECT 
+      store_name,
+      city,
+      COUNT(order_id) AS num_of_orders,
+      ROUND(AVG(customer_wait_time)) AS avg_cust_wait,
+      ROUND(SUM(payout),2) AS driver_income,
+      ROUND(SUM(ubers_revenue),2) AS avg_uber_revenue, 
+      ROUND(AVG(distance_miles),1) AS avg_miles
+    FROM compiled
+    GROUP BY store_name, city
+    ORDER BY num_of_orders DESC
+  )
+SELECT
+  store_name,
+  city,
+  ROUND((driver_income/num_of_orders),2) AS avg_driver_income_per_order,
+  avg_cust_wait,
+  ROUND((avg_uber_revenue/num_of_orders),2) AS avg_uber_rev_per_order
+FROM aggregates
+
+
+
