@@ -43,7 +43,7 @@ SELECT
 FROM `Delivery.combined_orders`
 WHERE store_name IS NOT NULL
 GROUP BY store_name, city
-ORDER BY store_name
+ORDER BY store_name;
 
 
 
@@ -57,7 +57,7 @@ SELECT
   COUNT(order_id) AS num_of_orders
 FROM `Delivery.combined_orders`
 GROUP BY store_name, city
-ORDER BY avg_pay DESC
+ORDER BY avg_pay DESC;
 
 --- Two issues to address:
 --- Some of the Best Paying stores lack enough orders to draw meaningful conclusions
@@ -79,7 +79,7 @@ WHERE type <> "Shop & Deliver"
 GROUP BY store_name, city
 HAVING num_of_orders >= 10
 ORDER BY avg_pay DESC
-LIMIT 20
+LIMIT 20;
 
 
 
@@ -130,7 +130,7 @@ SELECT
   ROUND((total_income / num_of_orders),2) AS avg_pay_per_order,
   ROUND((num_of_orders / days_in_city),2) AS orders_per_day
 FROM city_overview
-ORDER BY total_income DESC
+ORDER BY total_income DESC;
 
 --- orders_per_day seems to be most likely indicator of where the driver focused
 --- While the driver recieved a greater total_income from Covington compared to Bonney Lake, the incredibly low orders_per_day ratio suggests they were received in passing
@@ -157,7 +157,7 @@ SELECT
   ROUND(((SUM(total_income))/(SUM(hours))),2) AS hourly_rate
 FROM `Delivery.shifts`
 GROUP BY date
-ORDER BY date
+ORDER BY date;
 
 
 --- Look at which shifts were most profitable, in terms of hourly_rate
@@ -174,7 +174,7 @@ SELECT
 FROM `Delivery.shifts`
 WHERE hours >= 2
 ORDER BY hourly_rate DESC
-LIMIT 50
+LIMIT 50;
 
 
 
@@ -232,7 +232,7 @@ SELECT
 FROM daily_overview do
 JOIN top_shifts ts
   ON do.date = ts.date
-ORDER BY do.hourly_rate DESC
+ORDER BY do.hourly_rate DESC;
 
 --- Observations:
 --- Most days dropped by a small margin, but did actually retain a fairly high hourly rate
@@ -259,7 +259,7 @@ WITH RECURSIVE timesheet AS
 SELECT 
   TIME(ts) AS intervals
 FROM timesheet
-ORDER BY ts
+ORDER BY ts;
 
 
 --- Now we need to pull the day of the week & the hour from every delivery that was made (we will be using this for a join later)
@@ -346,5 +346,5 @@ SELECT
   *,
   ROUND((income / hours_worked), 2) AS avg_income
 FROM days_worked
-ORDER BY avg_income DESC
+ORDER BY avg_income DESC;
 
