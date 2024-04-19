@@ -86,7 +86,8 @@ LIMIT 20
 --- Using the criteria above, let’s consider order Frequency
 
 
-WITH top_paying AS 
+SELECT *
+FROM 
   (
     SELECT 
       store_name, 
@@ -100,8 +101,6 @@ WITH top_paying AS
     ORDER BY avg_pay DESC
     LIMIT 20
   )
-SELECT *
-FROM top_paying
 ORDER BY num_of_orders DESC;
 
 --- Observation: Hops N Drops gives the best odds for a high pay order
@@ -243,7 +242,8 @@ ORDER BY do.hourly_rate DESC
 
 --- Finally:
 --- Write a Recursive CTE that deconstructs each work hour into 15 minute increments
---- Use this Recursive CTE to breakdown how much income was earned, by day and hour of the day, suggesting what time & day offer the highest potential for earnings
+--- Save this as a Temp Table using the same method described in STEP 2 (^)
+--- We will use this Recursive CTE to breakdown how much income was earned, by day and hour of the day, suggesting what time & day offer the highest potential for earnings
 
 
 WITH RECURSIVE timesheet AS
@@ -261,50 +261,34 @@ SELECT
 FROM timesheet
 ORDER BY ts
 
---- Note: Big Query requires Recursive CTE’s to be saved as a Temp Table rather than part of the long string below, probably due to processing power 
---- The Recursive CTE above was saved as a Temp Table titled "intervals" which will be referenced below 
---- See Step 2 (^) for details on how to save a Temp Table in Big Query
 
-
-WITH extractions AS 
+--- Now we need to pull the day of the week & the hour from every delivery that was made (we will be using this for a join later)
+--- We will also need the pay of each order and (for reference purposes) the order id
+WITH co_extractions AS 
   (
     SELECT
       order_id,
-      store_id,
       payout,
-      delivered,
-      type,
-      co.shift_id,
-      DATE(clocked_in) AS day,
-      TIME(clocked_in) AS start_shift,
-      TIME(clocked_out) AS end_shift,
-      EXTRACT(dayofweek FROM delivered) AS dow,
-      TIME(delivered) AS delivery_time
-    FROM portfolio1821.Delivery.combined_orders AS co
-    JOIN portfolio1821.Delivery.shifts AS s
-    ON co.shift_id = s.shift_id
-  ),
-c_statements AS 
-  (
-    SELECT 
-      *,
       CASE
-        WHEN dow = 1 THEN "Sun"
-        WHEN dow = 2 THEN "Mon"
-        WHEN dow = 3 THEN "Tues"
-        WHEN dow = 4 THEN "Wed"
-        WHEN dow = 5 THEN "Thurs"
-        WHEN dow = 6 THEN "Fri"
-        WHEN dow = 7 THEN "Sat"
-      END AS day_of_week,
+        WHEN EXTRACT(dayofweek FROM delivered) = 1 THEN "Sun"
+        WHEN EXTRACT(dayofweek FROM delivered) = 2 THEN "Mon"
+        WHEN EXTRACT(dayofweek FROM delivered) = 3 THEN "Tues"
+        WHEN EXTRACT(dayofweek FROM delivered) = 4 THEN "Wed"
+        WHEN EXTRACT(dayofweek FROM delivered) = 5 THEN "Thurs"
+        WHEN EXTRACT(dayofweek FROM delivered) = 6 THEN "Fri"
+        WHEN EXTRACT(dayofweek FROM delivered) = 7 THEN "Sat"
+      END day_of_week,
       CASE 
-        WHEN EXTRACT(HOUR FROM delivery_time) BETWEEN 7 AND 11 THEN CONCAT(EXTRACT(HOUR FROM delivery_time), ' am')
-        WHEN EXTRACT(HOUR FROM delivery_time) = 12 THEN CONCAT(EXTRACT(HOUR FROM delivery_time), ' pm')
-        WHEN EXTRACT(HOUR FROM delivery_time) BETWEEN 13 AND 22 THEN CONCAT((EXTRACT(HOUR FROM delivery_time) - 12), ' pm')
+        WHEN EXTRACT(HOUR FROM delivered) BETWEEN 7 AND 11 THEN CONCAT(EXTRACT(HOUR FROM delivered), ' am')
+        WHEN EXTRACT(HOUR FROM delivered) = 12 THEN CONCAT(EXTRACT(HOUR FROM delivered), ' pm')
+        WHEN EXTRACT(HOUR FROM delivered) BETWEEN 13 AND 22 THEN CONCAT((EXTRACT(HOUR FROM delivered) - 12), ' pm')
       END AS hour
-    FROM extractions
+    FROM Delivery.combined_orders
   ),
-time_extractions AS
+--- Now we need to join our recursive cte to each shift we worked, giving us every 15 minute increment we worked of every day
+--- Grab the shift id for reference and pull the day of the week from each shift (we'll use this later)
+--- Also, extract the hour from each 15 minute interval worked
+recursive_extractions AS
   (
     SELECT
       shift_id,
@@ -329,30 +313,38 @@ time_extractions AS
     GROUP BY shift_id, day_of_week, intervals
     ORDER BY shift_id, day_of_week, intervals
   ),
-time_aggregates AS 
+--- Now, count each 15 minute increment worked each day and divide that number by 4; Group this by the day of the week and then the hour
+--- This gives us the total number of hours worked for each hour of every day of the week
+--- You may be wondering, why not just count the hours... 
+--- Simply put: we didn't always work a full hour and failing to recognize this disinction will greatly distort the final calculation we need to make
+recursive_aggregates AS 
   (
     SELECT
       day_of_week,
       hour,
-      (COUNT(intervals)/4) AS hour_worked
-    FROM time_extractions
+      (COUNT(intervals)/4) AS hours_worked
+    FROM recursive_extractions
     GROUP BY day_of_week, hour
   ),
+--- Now we add up how much we made for each hour of every day of the week
 days_worked AS 
   (
     SELECT
-      cs.day_of_week,
-      cs.hour,
-      ta.hour_worked,
+      cx.day_of_week,
+      cx.hour,
+      ra.hours_worked,
       ROUND(SUM(payout), 2) AS income
-    FROM c_statements cs
-    JOIN time_aggregates ta
-      ON cs.day_of_week = ta.day_of_week
-      AND cs.hour = ta.hour
-    GROUP BY day_of_week, hour, hour_worked
+    FROM co_extractions cx
+    JOIN recursive_aggregates ra
+      ON cx.day_of_week = ra.day_of_week
+      AND cx.hour = ra.hour
+    GROUP BY day_of_week, hour, hours_worked
   )
+--- Final calculation gives us a reasonable expectation of what we could expect to earn on any given hour of each day of the week
+--- aka, these are the best hours to work throughout the week
 SELECT
   *,
-  ROUND((income / hour_worked), 2) AS avg_income
+  ROUND((income / hours_worked), 2) AS avg_income
 FROM days_worked
 ORDER BY avg_income DESC
+
